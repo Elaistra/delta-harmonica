@@ -7,13 +7,18 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+
+# 打包成 exe 后，曲库放在 exe 自己旁边（"曲库"）；
+# 源码运行时保持原来的「项目旁的曲库」，老用户的配置不受影响。
+FROZEN = bool(getattr(sys, "frozen", False))
 
 DEFAULT: dict = {
     # 默认曲库：程序目录旁边的「曲库」文件夹。
     # ★ 用相对路径（按程序所在目录解析），不要写死某台机器的绝对路径 ——
     #   否则开源分发时会把私人目录结构带出去，别人拿到也指向无效位置。
-    "lib_dir": "../曲库",
+    "lib_dir": "曲库" if FROZEN else "../曲库",
     "mapping": "web_harmonica",  # 用哪份键位映射（mapping/*.json）
     "engine": "own",             # own=自己的内核（重写中） / reference=旧内核（对照用）
     "rate": 1.0,                 # 速度倍率（内核支持 0.05~8.0，界面只放 0.5~2.0）

@@ -56,8 +56,50 @@ from .mapping import list_mappings, load_mapping
 from .player import Player
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
+# ★ 打包成 exe 后 __file__ 指向的是临时解压目录（_MEIxxxx），用它算路径的话
+#   曲库会跑到 Temp 里，关掉程序就没了。所以冻结运行时一律以 exe 自己所在目录为准。
+ROOT = (Path(sys.executable).resolve().parent if getattr(sys, "frozen", False)
+        else HERE.parent)
 CONFIG_PATH = ROOT / "hca.json"
+
+
+def _vlq(n: int) -> bytes:
+    """MIDI 的可变长度量（把整数拆成 7 位一组，高位补 1）。"""
+    out = [n & 0x7F]
+    n >>= 7
+    while n:
+        out.append((n & 0x7F) | 0x80)
+        n >>= 7
+    return bytes(reversed(out))
+
+
+def _simple_midi(notes: list[tuple[int, int]], bpm: int = 120) -> bytes:
+    """把一串「(音高 MIDI 号, 占几拍)」写成最小合法的 MIDI（format 0）。
+
+    用途有两个：自检时曲库是空的要有东西可弹；首次运行给新用户放一首示例曲。
+    """
+    ticks = int(round(480))                      # 一拍 480 tick
+    us_per_beat = int(round(60_000_000 / bpm))
+    tempo = us_per_beat.to_bytes(3, "big")
+    events = bytes([0x00, 0xFF, 0x51, 0x03, *tempo,
+                    0x00, 0xFF, 0x58, 0x04, 0x04, 0x02, 0x18, 0x08])   # 4/4
+    for pitch, beats in notes:
+        dur = max(1, int(round(beats * ticks)))
+        events += bytes([0x00, 0x90, pitch & 0x7F, 0x40]) + _vlq(dur) \
+                  + bytes([0x80, pitch & 0x7F, 0x40])
+    events += bytes([0x00, 0xFF, 0x2F, 0x00])
+    track = b"MTrk" + len(events).to_bytes(4, "big") + events
+    head = b"MThd" + (6).to_bytes(4, "big") + bytes([0x00, 0x00, 0x00, 0x01, 0x01, 0xE0])
+    return head + track
+
+
+# 小星星（Twinkle Twinkle Little Star）—— 首次运行放进曲库的那首示例曲
+STAR_NOTES = [(60, 1), (60, 1), (67, 1), (67, 1), (69, 1), (69, 1), (67, 2),
+              (65, 1), (65, 1), (64, 1), (64, 1), (62, 1), (62, 1), (60, 2),
+              (67, 1), (67, 1), (65, 1), (65, 1), (64, 1), (64, 1), (62, 2),
+              (67, 1), (67, 1), (65, 1), (65, 1), (64, 1), (64, 1), (62, 2),
+              (60, 1), (60, 1), (67, 1), (67, 1), (69, 1), (69, 1), (67, 2),
+              (65, 1), (65, 1), (64, 1), (64, 1), (62, 1), (62, 1), (60, 2)]
 SLOT_COUNT = 10
 
 
@@ -1783,6 +1825,26 @@ class App(tk.Tk):
     def lib_path(self) -> str:
         return self.var_lib.get().strip()
 
+    def _ensure_starter_song(self):
+        """曲库空的时候放一首示例曲进去。
+
+        新用户（尤其是双击 exe 的那种）打开程序时曲库是空的，列表里什么都没有，
+        不知道下一步该干嘛。放一首小星星进去，至少能立刻试一下弹出来是什么样。
+        只在每次启动试一次，写不进去就算了，不打扰用户。
+        """
+        if getattr(self, "_starter_tried", False):
+            return
+        self._starter_tried = True
+        try:
+            lib = Path(self.lib_path())
+            lib.mkdir(parents=True, exist_ok=True)
+            p = lib / "示例曲-小星星.mid"
+            if not p.exists():
+                p.write_bytes(_simple_midi(STAR_NOTES))
+            self.refresh_library()           # 重新扫一遍（这次有曲子了，不会递归）
+        except OSError:
+            pass
+
     def refresh_library(self):
         if self.player.is_running:
             self.say("演奏中不能换曲库，先停止。", "warn")
@@ -1803,7 +1865,10 @@ class App(tk.Tk):
                         "", "", "")
             self.tree.insert("", "end", iid=f, values=vals)
         if not self.files:
-            self.say(f"曲库是空的：{self.lib_path()}", "warn")
+            self._ensure_starter_song()      # 第一次用：放一首示例曲，双击就有东西可弹
+        if not self.files:
+            self.say(f"曲库是空的：{self.lib_path()}。去「内置社区分享库」页下载，"
+                     f"或把 .mid 文件放进这个文件夹。", "warn")
         else:
             self.say(f"曲库 {self.lib_path()}：{len(self.files)} 首"
                      + (f"（{n_intro} 首带前奏）" if n_intro else ""), "ok")
@@ -2592,6 +2657,7 @@ def selftest(out_path: str | None = None) -> int:
     app = App(dry=True, cfg_path=tmp_cfg)
     app.withdraw()
     states: list[str] = []
+    demo_path: Path | None = None
     try:
         app.update()
         app.geometry("1080x720")
@@ -2599,6 +2665,14 @@ def selftest(out_path: str | None = None) -> int:
         app._draw_shell()
         app.update()
 
+        if not app.files:
+            # 曲库是空的（刚 clone 下来就是这种情况）：临时放一首进去，
+            # 让自检在任何机器上都能跑完，finally 里会删掉，不留在用户曲库里。
+            lib = Path(app.lib_path())
+            lib.mkdir(parents=True, exist_ok=True)
+            demo_path = lib / "_selftest_demo.mid"
+            demo_path.write_bytes(_simple_midi([(60, 1), (62, 1), (64, 1), (65, 1)]))
+            app.refresh_library()
         chk("曲库已加载", len(app.files) > 0, f"{len(app.files)} 首")
         chk("用的是临时配置（不碰用户的）", app.cfg_path == tmp_cfg, str(app.cfg_path))
         chk("玻璃外观探测有结果", "backdrop" in app.glass_info,
@@ -2781,9 +2855,21 @@ def selftest(out_path: str | None = None) -> int:
             app.destroy()
         except Exception:
             pass
+        if demo_path is not None:
+            try:
+                demo_path.unlink(missing_ok=True)      # 别把自检用的曲子留在用户曲库里
+            except OSError:
+                pass
 
     text = json.dumps(res, ensure_ascii=False, indent=1)
-    print(text)
+    # ★ 打包成 exe 后 stdout 可能是 GBK（结果里有 − 这类字符会直接 UnicodeEncodeError），
+    #   而图形界面版连 stdout 都没有（sys.stdout 是 None）。两种情况都不能让自检崩。
+    try:
+        if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        print(text)
+    except (UnicodeEncodeError, OSError, ValueError):
+        pass
     if out_path:
         Path(out_path).write_text(text, encoding="utf-8")
     return 0 if res.get("ok") else 1

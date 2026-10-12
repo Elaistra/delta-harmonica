@@ -13,6 +13,29 @@
 
 ---
 
+## 怎么拿到
+
+**不想装 Python 的（推荐）**：到 Releases 页面下载 `三角洲口琴自动演奏.exe`，双击就能用。
+
+<https://github.com/xkrmand-web/delta-harmonica/releases>
+
+第一次打开时，程序会在 exe 旁边自动建一个「曲库」文件夹，并放进一首示例曲（小星星），
+所以**双击之后立刻就有东西可弹**。想弹别的曲子：进「内置社区分享库」页搜索下载，
+或者把自己的 `.mid` 文件丢进那个「曲库」文件夹里。
+
+Windows 可能会弹"未知发布者"的警告（这是没有购买代码签名证书的必然结果，点"仍要运行"
+即可）；少数杀毒软件会误报 PyInstaller 打包的程序，需要加白名单。
+
+**想看源码或改代码的**：
+
+```bash
+git clone https://github.com/xkrmand-web/delta-harmonica.git
+```
+
+也可以直接在 Releases 页面下载源码压缩包，或者在仓库页点 Code → Download ZIP。
+
+---
+
 ## 运行
 
 需要 Python 3.11 以上（实测 3.13 通过）。不需要安装任何第三方库。
