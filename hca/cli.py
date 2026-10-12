@@ -52,7 +52,7 @@ def _summary(score) -> str:
 def main(argv=None) -> int:
     cfg = cfgmod.load(CONFIG_PATH)
     ap = argparse.ArgumentParser(
-        prog="口琴演奏器", description="口琴演奏器 · 新版 —— 用真实键鼠事件驱动游戏",
+        prog="三角洲口琴自动演奏", description="三角洲口琴自动演奏 —— 用真实键鼠事件驱动游戏",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--lib", default=cfg["lib_dir"], help="曲库目录（相对程序目录）")
     ap.add_argument("--mapping", default=cfg["mapping"],

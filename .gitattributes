@@ -1,0 +1,16 @@
+* text=auto
+
+# Windows 批处理必须 CRLF，否则某些机器上运行异常
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 源码与文档统一 LF
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.spec text eol=lf
+
+# 二进制不参与行尾转换
+*.png binary
+*.ico binary
+*.mid binary

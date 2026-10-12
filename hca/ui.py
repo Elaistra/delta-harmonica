@@ -342,7 +342,7 @@ THEME = {
     "row_h": 26,
 }
 
-PAGES = [("play", "演奏"), ("manage", "收藏夹"), ("online", "在线曲库"),
+PAGES = [("play", "演奏"), ("manage", "收藏夹"), ("online", "内置社区分享库"),
          ("hotkeys", "热键"), ("log", "日志"), ("settings", "设置")]
 
 
@@ -488,7 +488,7 @@ class App(tk.Tk):
         # 收藏夹 / 自定义热键（Soundpad 式）：数据都在 hca.json
         self.fav_view = ""                            # 当前左栏选中的收藏夹名（""=全部曲目）
         self._migrate_slots()                         # 旧 10 槽位一次性迁成自由热键
-        # 在线曲库（B站三角洲谱）的网络队列：工作线程只丢消息，主线程轮询
+        # 内置社区分享库（B站三角洲谱）的网络队列：工作线程只丢消息，主线程轮询
         self._net_events: queue.Queue = queue.Queue()
         self._net_busy = False
         self.bili: bili.BiliClient | None = None
@@ -502,7 +502,7 @@ class App(tk.Tk):
         # 提权标识：run.bat 在 fltmc 通过后设 HCA_ELEVATED=1，标题栏显示出来，
         # 这样"到底是不是管理员在跑"不用猜（双击不提权的 bat 就没有这个标记）
         self._elevated = (os.environ.get("HCA_ELEVATED") == "1")
-        self.title("口琴演奏器 · 新版〔管理员〕" if self._elevated else "口琴演奏器 · 新版")
+        self.title("三角洲口琴自动演奏〔管理员〕" if self._elevated else "三角洲口琴自动演奏")
         self.geometry("1080x720")
         self.minsize(960, 640)
         self.update_idletasks()
@@ -793,7 +793,7 @@ class App(tk.Tk):
         pad = SP["sm"] + 2
         c.create_text(x + pad + 4, y + pad + 16, anchor="w", text="♪",
                       font=(t["font"], 18, "bold"), fill=t["accent"], tags="pill")
-        c.create_text(x + pad + 30, y + pad + 10, anchor="w", text="口琴演奏器",
+        c.create_text(x + pad + 30, y + pad + 10, anchor="w", text="三角洲口琴自动演奏",
                       font=(t["font"], t["size_title"], "bold"), fill=t["ink"], tags="pill")
         c.create_text(x + pad + 30, y + pad + 28, anchor="w", text="新版 · 自研内核",
                       font=(t["font"], t["size_sm"]), fill=t["ink_faint"], tags="pill")
@@ -1352,20 +1352,24 @@ class App(tk.Tk):
     def _after_library_change(self):
         self.refresh_library()                      # 内部会顺带刷新收藏夹右栏
 
-    # ── 在线曲库（B站三角洲口琴谱） ─────────────────────────────
+    # ── 内置社区分享库（B站三角洲口琴谱） ─────────────────────────────
     def _build_page_online(self):
         t = THEME
         f = tk.Frame(self.canvas, bg=t["card"])
         self._frames["page_online"] = f
         head = tk.Frame(f, bg=t["card"])
         head.pack(fill="x")
-        tk.Label(head, text="在线曲库", bg=t["card"], fg=t["ink"],
+        tk.Label(head, text="内置社区分享库", bg=t["card"], fg=t["ink"],
                  font=(t["font"], t["size_title"], "bold")).pack(side="left")
         PillButton(head, "下载所选", command=self.on_download).pack(side="right")
-        tk.Label(f, text="搜索 B 站「三角洲行动口琴谱」社区曲库（bilibili.com/toy/deltaforce）。"
-                         "关键词留空 = 按最新上传浏览。下载 = 转成 MIDI 存入曲库根目录。",
+        tk.Label(f, text="直连 B 站「三角洲行动口琴谱」社区曲库（bilibili.com/toy/deltaforce）。"
+                         "关键词留空 = 按最新上传浏览，下载 = 转成 MIDI 存入曲库根目录。",
                  bg=t["card"], fg=t["ink_soft"],
                  font=(t["font"], t["size_sm"])).pack(anchor="w", pady=(2, SP["sm"]))
+        tk.Label(f, text="单向只读：只从社区拉谱面，不会把你本地的曲子传上去"
+                         "（程序对外只有搜索和下载两类请求）。",
+                 bg=t["card"], fg=t["accent"],
+                 font=(t["font"], t["size_sm"])).pack(anchor="w", pady=(0, SP["sm"]))
 
         row = tk.Frame(f, bg=t["card"])
         row.pack(fill="x")
@@ -1398,7 +1402,7 @@ class App(tk.Tk):
         self.on_tree.pack(fill="both", expand=True)
         self.on_tree.bind("<Double-1>", lambda e: self.on_download())
 
-    # ── 在线曲库：网络操作（工作线程 + 队列） ─────────────────────
+    # ── 内置社区分享库：网络操作（工作线程 + 队列） ─────────────────────
     def _client(self) -> bili.BiliClient:
         if self.bili is None:
             self.bili = bili.BiliClient()
@@ -1454,7 +1458,7 @@ class App(tk.Tk):
             self.lbl_online.configure(text="")
         elif kind == "error":
             self.lbl_online.configure(text="")
-            self._modal("在线曲库", payload, kind="error")
+            self._modal("内置社区分享库", payload, kind="error")
         elif kind == "search":
             data = payload
             self._online_cursor = data["cursor"]
@@ -1470,7 +1474,7 @@ class App(tk.Tk):
                 self._online_rows[sid] = s
             n = len(data["scores"])
             where = "追加" if data["append"] else "本次"
-            self.say(f"在线曲库：{where} {n} 首"
+            self.say(f"内置社区分享库：{where} {n} 首"
                      + ("" if self._online_cursor else "（没有更多了）"), "ok")
         elif kind == "downprog":
             i, n = payload
@@ -1486,7 +1490,7 @@ class App(tk.Tk):
     def on_download(self):
         sel = list(self.on_tree.selection())
         if not sel:
-            self._modal("在线曲库", "先选中要下载的曲目（可多选）。")
+            self._modal("内置社区分享库", "先选中要下载的曲目（可多选）。")
             return
         ids = list(sel)
         # ★ lib_path() 内部读的是 tk.StringVar —— 必须在主线程取好再交给工作线程，
@@ -1909,7 +1913,7 @@ class App(tk.Tk):
 
     def on_play(self, start_s: float | None = None):
         if not self.actions:
-            self._modal("口琴演奏器", "先挑一首能弹的曲子。")
+            self._modal("三角洲口琴自动演奏", "先挑一首能弹的曲子。")
             return
         self._play_gen = getattr(self, "_play_gen", 0) + 1   # 本次播放的世代号
         if self.player.is_running:
@@ -1931,7 +1935,7 @@ class App(tk.Tk):
                 if hasattr(backend, "park"):
                     backend.park()
             except Exception as e:
-                self._modal("口琴演奏器", str(e), kind="error")
+                self._modal("三角洲口琴自动演奏", str(e), kind="error")
                 return
 
         q = self._ui_events
@@ -2786,7 +2790,7 @@ def selftest(out_path: str | None = None) -> int:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="hca.ui", description="口琴演奏器 · 新版（界面）")
+    ap = argparse.ArgumentParser(prog="hca.ui", description="三角洲口琴自动演奏（界面）")
     ap.add_argument("--selftest", action="store_true", help="自检：不显示窗口、不发按键")
     ap.add_argument("--out", help="自检结果写到文件")
     args = ap.parse_args(argv)
@@ -2807,7 +2811,7 @@ def main(argv=None) -> int:
         try:
             from tkinter import messagebox
             root = tk.Tk(); root.withdraw()
-            messagebox.showerror("口琴演奏器启动失败", f"错误已写入：\n{log}")
+            messagebox.showerror("三角洲口琴自动演奏启动失败", f"错误已写入：\n{log}")
             root.destroy()
         except Exception:
             pass

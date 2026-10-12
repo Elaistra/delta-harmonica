@@ -1,4 +1,4 @@
-"""B 站「三角洲行动口琴谱」在线曲库客户端（纯逻辑，不碰 Tk、不碰 Windows API）。
+"""B 站「三角洲行动口琴谱」社区曲库客户端（只读：只下载，不上传）（纯逻辑，不碰 Tk、不碰 Windows API）。
 
 数据来源：https://www.bilibili.com/toy/deltaforce/index.html 的社区曲库。
 前端 JS 里写死的 API 基址是 https://111.229.198.119/v1（证书签给域名、

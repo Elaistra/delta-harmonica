@@ -50,7 +50,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="口琴演奏器-新版",
+    name="三角洲口琴自动演奏",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
