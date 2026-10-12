@@ -98,8 +98,16 @@ def _collect_notes(data: bytes, division: int) -> tuple[list[tuple[float, float,
                     got_tempo = True
                 elif mt == 0x58 and ln >= 2:
                     # ★ 实测：拍号要换算成「四分音符拍」—— 6/8 → 3.0，1/8 → 0.5，2/2 → 4.0
-                    meter_den = 2 ** chunk[1]
-                    beats_per_bar = chunk[0] * 4.0 / meter_den
+                    # 分母在文件里就是一个字节（0~255）：不夹住的话 2**255 会让小节长度
+                    # 趋近 0，_to_bars 里切分小节的循环要跑天文数字次 → 界面永久卡死
+                    # （不是异常，try/except 救不了，只能杀进程）。分子为 0 则会除零。
+                    # 两个都按 4/4 兜底，正常曲子不受影响。
+                    den = min(max(int(chunk[1]), 0), 8)
+                    num = int(chunk[0])
+                    if num <= 0:
+                        num, den = 4, 2
+                    meter_den = 2 ** den
+                    beats_per_bar = num * 4.0 / meter_den
                 continue
 
             if st in (0xF0, 0xF7):                # sysex
@@ -177,6 +185,13 @@ def _to_bars(raw: list[tuple[float, float, int]], bar_beats: float,
          客栈都有 Σ4.25 > 4.0 的小节，旧内核就是这样，不裁）。
       5. 结尾：只把"最后一个音所落在的小节"补满休止，不再新建空小节（probe ①）。
     """
+    # 兜底：小节长度不能是 0 或无限小，否则下面的切分循环跑不完 / 除零
+    try:
+        bar_beats = float(bar_beats)
+    except (TypeError, ValueError):
+        bar_beats = 4.0
+    if not (0.01 <= bar_beats <= 64.0):
+        bar_beats = 4.0
     items: list[tuple[float, float, tuple]] = []      # (绝对起点拍, 时值, 音)
     cursor = 0.0
     for on, off, key in raw:

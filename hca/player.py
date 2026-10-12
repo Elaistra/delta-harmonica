@@ -31,6 +31,7 @@ class Player:
         self._pause = threading.Event()
         self._state = IDLE
         self._t0 = 0.0
+        self._paused_at = 0.0          # 按下暂停那一刻的墙钟（恢复时用来补回时间基准）
         self._rate = 1.0
         self._sent = 0
         self._total = 0
@@ -56,7 +57,10 @@ class Player:
     @property
     def elapsed(self) -> float:
         """已经弹到第几秒（**基准速度**下的秒数，和动作表同一口径）。"""
-        if self._state not in (PLAYING, PAUSED):
+        if self._state == PAUSED:
+            # 暂停期间进度必须冻住：否则拖进度条/界面显示都会算上"暂停了多久"
+            return max(0.0, (self._paused_at - self._t0) * self._rate)
+        if self._state != PLAYING:
             return 0.0
         return max(0.0, (time.perf_counter() - self._t0) * self._rate)
 
@@ -76,12 +80,17 @@ class Player:
     def pause(self) -> None:
         if self._state == PLAYING:
             self._state = PAUSED
+            self._paused_at = time.perf_counter()
             self._pause.set()
             self._quiet()
             self._emit(PAUSED)
 
     def resume(self) -> None:
         if self._state == PAUSED:
+            # ★ 把时间基准往后挪"暂停了多久"。_wait_until 是拿墙钟减 _t0 算时刻的，
+            #   不补这一步的话，暂停那几秒会被算成"已经弹过去了"——一继续就整段
+            #   音符被跳过（暂停 3 秒 = 吃掉 3 秒的曲子）。
+            self._t0 += time.perf_counter() - self._paused_at
             self._pause.clear()
             self._state = PLAYING
 

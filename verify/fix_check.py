@@ -163,6 +163,41 @@ def main() -> int:
     except Exception as ex:
         chk("TCheckbutton 样式可查询", False, str(ex))
 
+    print("\n[9] 录制热键不再凭空多出 Alt")
+    # Windows 下 Tk 的 event.state：0x0001=Shift 0x0004=Ctrl 0x20000=Alt，
+    # 而 0x0008 是 NumLock 指示灯位。老代码把 0x0008 当 Alt，于是 NumLock 开着时
+    # 录 Ctrl+1 会变成 Ctrl+Alt+1。下面用合成事件直接喂给录制窗复现。
+    HK_CASES = [
+        ("Ctrl+1（NumLock 开，state=0xc）",
+         [("<Key>", "1", 0x0000000C, 0x31)], "Ctrl+1"),
+        ("Alt+J（state=0x20008）",
+         [("<Key>", "j", 0x00020008, 0x4A)], "Alt+J"),
+        ("Ctrl+Alt+J（state=0x2000c）",
+         [("<Key>", "j", 0x0002000C, 0x4A)], "Ctrl+Alt+J"),
+        ("Ctrl+Shift+1（keysym 会变成 exclam）",
+         [("<Key>", "exclam", 0x0000000D, 0x31)], "Ctrl+Shift+1"),
+        ("Win+K（按下被系统吃掉，只剩抬键）",
+         [("<Key>", "Win_L", 0x00000008, 0x5B),
+          ("<KeyRelease>", "k", 0x00000008, 0x4B)], "Win+K"),
+        ("单独按 J（没修饰键，应拒绝）",
+         [("<Key>", "j", 0x00000008, 0x4A)], None),
+    ]
+    for label, evs, expect in HK_CASES:
+        def _drive(evs=evs):
+            tops = [c for c in app.winfo_children() if isinstance(c, tk.Toplevel)]
+            if not tops:
+                return
+            w = tops[-1]
+            for seq, ks, st, kc in evs:
+                w.event_generate(seq, keysym=ks, state=st, keycode=kc)
+                app.update()
+
+        app.after(30, _drive)
+        app.after(1200, lambda: [w.destroy() for w in app.winfo_children()
+                                 if isinstance(w, tk.Toplevel)])
+        got = app._capture_key_modal()
+        chk(label, got == expect, f"得到 {got!r} / 期望 {expect!r}")
+
     try:
         app.destroy()
     except Exception:

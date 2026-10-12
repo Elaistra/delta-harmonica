@@ -37,29 +37,87 @@ DEFAULT: dict = {
 
 __all__ = ["DEFAULT", "load", "save"]
 
+# 数值字段的合法范围（写得越界的直接夹回来，别让程序在启动时除零/崩溃）
+_RANGE = {"rate": (0.05, 8.0), "countdown": (0.0, 60.0)}
+_BOOL_KEYS = ("no_intro", "loop", "legato", "hotkeys", "park_cursor")
+_STR_KEYS = ("lib_dir", "mapping", "engine", "last_song")
+_LIST_KEYS = ("favorites", "hotkey_map")
+
+
+def _coerce(cfg: dict) -> dict:
+    """把配置里每个字段矫正成该有的类型。
+
+    为什么必须做：hca.json 是可以手改的，也会被别的程序（或写盘被打断）写坏。
+    老版本只校验"整体是不是 dict"，于是 "rate": "快" 会在 float() 处炸、
+    "countdown": null 会在 TypeError 处炸 —— 而那两行都在 App.__init__ 里，
+    对用户就是"双击没反应"。字段级别兜住，坏值退回默认值。
+    """
+    for k, (lo, hi) in _RANGE.items():
+        try:
+            v = float(cfg.get(k))
+        except (TypeError, ValueError):
+            v = float(DEFAULT[k])
+        if v != v:                                    # NaN
+            v = float(DEFAULT[k])
+        cfg[k] = max(lo, min(hi, v))
+    for k in _BOOL_KEYS:
+        cfg[k] = bool(cfg.get(k, DEFAULT[k]))
+    for k in _STR_KEYS:
+        if not isinstance(cfg.get(k), str):
+            cfg[k] = DEFAULT[k]
+    for k in _LIST_KEYS:
+        if not isinstance(cfg.get(k), list):
+            cfg[k] = []
+    ck = cfg.get("control_keys")
+    if not isinstance(ck, dict):
+        ck = {}
+    cfg["control_keys"] = {k: str(ck.get(k) or "")
+                           for k in DEFAULT["control_keys"]}
+    return cfg
+
 
 def load(path: Path) -> dict:
     cfg = dict(DEFAULT)
     try:
-        if Path(path).is_file():
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        p = Path(path)
+        if p.is_file():
+            data = json.loads(p.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 # "slots" 是已废弃的旧键，放行一次给 ui 的迁移逻辑读，迁移完会删掉
                 cfg.update({k: v for k, v in data.items()
                             if k in DEFAULT or k == "slots"})
     except Exception:
-        pass
-    return cfg
+        # ★ 读不出来不能就这么算了：老版本直接返回一份纯默认值，用户随手点一首曲子
+        #   就会 save() 覆盖原文件 —— 收藏夹和热键无声无息全丢。留一份坏文件在旁边，
+        #   （至少还有救），并且这次先不自动覆盖。
+        try:
+            p = Path(path)
+            if p.is_file():
+                p.with_name(p.name + ".bad").write_bytes(p.read_bytes())
+        except Exception:
+            pass
+        return _coerce(cfg)
+    return _coerce(cfg)
 
 
 def save(path: Path, cfg: dict) -> None:
+    p = Path(path)
+    text = json.dumps({**DEFAULT, **cfg},          # ★ cfg 里的键优先，且保留新键
+                      ensure_ascii=False, indent=1)
     try:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        # ★ cfg 里的键优先（覆盖 DEFAULT），且**保留 DEFAULT 之外的新键**
-        #   （favorites/hotkey_map 就是这么加进来的；曾因只存 DEFAULT 键丢过数据）
-        Path(path).write_text(
-            json.dumps({**DEFAULT, **cfg},
-                       ensure_ascii=False, indent=1),
-            encoding="utf-8")
+        p.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    # ★ 先写临时文件再整体替换：直接 write_text 覆盖的话，写一半被断电/强杀打断
+    #   就留下半截 JSON，下次启动读不出来（见 load 的后果）。
+    tmp = p.with_name(p.name + ".tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(p)
+        return
+    except Exception:
+        pass
+    try:                                            # 某些环境不让 replace，退回直接写
+        p.write_text(text, encoding="utf-8")
     except Exception:
         pass

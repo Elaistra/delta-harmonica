@@ -50,12 +50,21 @@ from . import glass
 from . import library
 from . import trash
 from .compile import compile_actions
-from .hotkeys import Hotkeys
+from .hotkeys import Hotkeys, VK
 from .inputs import NullInput, make_backend
 from .mapping import list_mappings, load_mapping
 from .player import Player
 
 HERE = Path(__file__).resolve().parent
+
+# 虚拟键码 → 键名（反查表）。录热键时优先用它，因为 Windows 下 Tk 给的
+# event.keycode 就是虚拟键码，而 keysym 会随修饰键变（Shift+1 的 keysym 是
+# exclam，不是 1）—— 靠 keysym 认键会把 Shift+数字 全认成"注册不了"。
+_VK_NAME: dict[int, str] = {}
+for _name, _vk in VK.items():
+    if _VK_NAME.get(_vk) in (None, " "):
+        _VK_NAME[_vk] = _name
+
 # ★ 打包成 exe 后 __file__ 指向的是临时解压目录（_MEIxxxx），用它算路径的话
 #   曲库会跑到 Temp 里，关掉程序就没了。所以冻结运行时一律以 exe 自己所在目录为准。
 ROOT = (Path(sys.executable).resolve().parent if getattr(sys, "frozen", False)
@@ -1107,11 +1116,17 @@ class App(tk.Tk):
             for f in self.files:
                 tags = "、".join(favmod.favorites_of(self._favs(), Path(f).name)) or "—"
                 self.fav_songs.insert("", "end", iid=f, values=(Path(f).stem, tags))
+            # ★ 一首曲子可以同时属于多个收藏夹，丢文件的那一栏如果按「曲名」直接
+            #   插，第二个收藏夹会撞重复 iid → TclError。而这里是在 __init__ 里跑的，
+            #   一炸就是双击没反应。先按曲名归并，收藏夹名用「、」连起来。
+            miss: dict[str, list[str]] = {}
             for fav in self._favs():
                 for s in fav["songs"]:
                     if s not in names:
-                        self.fav_songs.insert("", "end", iid=f"miss::{s}",
-                                              values=(f"{s}  ⚠ 文件不在了", fav["name"]))
+                        miss.setdefault(s, []).append(fav["name"])
+            for s, fnames in miss.items():
+                self.fav_songs.insert("", "end", iid=f"miss::{s}",
+                                      values=(f"{s}  ⚠ 文件不在了", "、".join(fnames)))
         else:
             try:
                 fav = favmod._find(self._favs(), self.fav_view)
@@ -1390,6 +1405,13 @@ class App(tk.Tk):
         if changed:                             # 清空成 [] 也要写回，不能用 any(...)
             self.cfg["hotkey_map"] = m
         cfgmod.save(self.cfg_path, self.cfg)
+        if changed:
+            # ★ 必须重新注册：_hk_songs 是"第几条热键 → 哪首曲子"的对照表，删掉一条
+            #   后后面的下标整体前移，不重注册的话按旧组合键弹的是另一首曲子；
+            #   被删那首的键也还挂在系统里，按下去会提示"不在曲库里了"。
+            self.refresh_hk_column()
+            if self.cfg.get("hotkeys", True):
+                self.start_hotkeys()
 
     def _after_library_change(self):
         self.refresh_library()                      # 内部会顺带刷新收藏夹右栏
@@ -1498,6 +1520,14 @@ class App(tk.Tk):
         if kind == "idle":
             self._net_busy = False
             self.lbl_online.configure(text="")
+            if getattr(self, "_pending_lib_refresh", False):
+                # 下载那几首统一在这一次刷：每下完一首就 refresh_library 一次的话，
+                # 勾 20 首就要全量重扫 20 遍（每遍都重新解析整个曲库），界面会明显卡
+                self._pending_lib_refresh = False
+                if not self.player.is_running:
+                    self.refresh_library()
+                else:
+                    self.say("演奏中，先别切曲库；停止后点「刷新」即可看到。", "warn")
         elif kind == "error":
             self.lbl_online.configure(text="")
             self._modal("内置社区分享库", payload, kind="error")
@@ -1512,6 +1542,10 @@ class App(tk.Tk):
                         f"{s.get('bpm', 0):g}", s.get("noteCount", ""),
                         self._fmt_dur(s.get("durationMs")),
                         row.get("downloads", ""), row.get("likes", ""))
+                # 翻页游标偶尔会带回重复的 id，直接 insert 会抛 TclError，
+                # 而这里的 except 会把整批剩下的行一起吞掉 → 用户看到"什么都没加载"
+                if sid in self._online_rows:
+                    continue
                 self.on_tree.insert("", "end", iid=sid, values=vals)
                 self._online_rows[sid] = s
             n = len(data["scores"])
@@ -1524,10 +1558,7 @@ class App(tk.Tk):
         elif kind == "download":
             path = payload
             self.say(f"已下载到曲库：{path.name}", "ok")
-            if not self.player.is_running:
-                self.refresh_library()
-            else:
-                self.say("演奏中，先别切曲库；停止后点「刷新」即可看到。", "warn")
+            self._pending_lib_refresh = True      # 攒着，等这批下完统一刷（见 idle 分支）
 
     def on_download(self):
         sel = list(self.on_tree.selection())
@@ -1835,8 +1866,11 @@ class App(tk.Tk):
         if getattr(self, "_starter_tried", False):
             return
         self._starter_tried = True
+        raw = self.lib_path()
+        if not raw:                                  # 输入框被清空时别往当前目录里塞
+            return
         try:
-            lib = Path(self.lib_path())
+            lib = Path(raw)
             lib.mkdir(parents=True, exist_ok=True)
             p = lib / "示例曲-小星星.mid"
             if not p.exists():
@@ -1877,6 +1911,18 @@ class App(tk.Tk):
             self._fav_reload_left()
             self._fav_reload_right()
         self._draw_shell()
+        # ★ 当前曲目被改名/删掉后，self.current 会残留一个已经不存在的路径：右侧
+        #   面板还挂着旧曲名，self.actions 还是旧曲的编译结果（勾"连奏"重编译时会
+        #   去读一个不存在的文件）。清掉，等下面的"恢复上次选曲"重新选。
+        if getattr(self, "current", "") and self.current not in self.files:
+            self.current = ""
+            self.actions = []
+            try:
+                self.lbl_title.configure(text="—")
+                self.lbl_meta.configure(text="")
+                self.refresh_preview()
+            except Exception:
+                pass
         last = self.cfg.get("last_song")
         if last:
             for f in self.files:
@@ -1968,9 +2014,29 @@ class App(tk.Tk):
         r = max(0.05, float(self.var_rate.get()))
         self.lbl_rate.configure(text=f"{r:.2f}×")
         self.cfg["rate"] = r
-        cfgmod.save(self.cfg_path, self.cfg)
+        # 按住方向键 / 拖滑块会连续触发几十次，每次都全量写一次 hca.json 没必要
+        self._save_soon()
         self.player.set_rate(r)
         self.refresh_preview()
+
+    def _save_soon(self, delay_ms: int = 500):
+        """延迟合并写盘：连续改动只写最后一次。"""
+        try:
+            if getattr(self, "_save_timer", None):
+                self.after_cancel(self._save_timer)
+        except Exception:
+            pass
+        try:
+            self._save_timer = self.after(delay_ms, self._save_now)
+        except Exception:
+            self._save_timer = None
+
+    def _save_now(self):
+        self._save_timer = None
+        try:
+            cfgmod.save(self.cfg_path, self.cfg)
+        except Exception:
+            pass
 
     # ── 播放 ───────────────────────────────────────────────────────
     def _total(self) -> float:
@@ -2121,8 +2187,43 @@ class App(tk.Tk):
         "backslash": "\\", "semicolon": ";", "apostrophe": "'", "comma": ",",
         "period": ".", "slash": "/", "grave": "`", "space": "space",
     }
-    _MOD_SYMS = {"Control_L", "Control_R", "Shift_L", "Shift_R",
-                 "Alt_L", "Alt_R", "Meta_L", "Meta_R", "Super_L", "Super_R"}
+    # keysym → 修饰键名。Win 键在 Windows 上 Tk 给的是 Win_L/Win_R（不是 X11 的 Super_L），
+    # 两个都列上。
+    _MOD_NAME = {
+        "Control_L": "Ctrl", "Control_R": "Ctrl",
+        "Shift_L": "Shift", "Shift_R": "Shift",
+        "Alt_L": "Alt", "Alt_R": "Alt",
+        "Meta_L": "Win", "Meta_R": "Win", "Super_L": "Win", "Super_R": "Win",
+        "Win_L": "Win", "Win_R": "Win",
+    }
+    _MOD_SYMS = set(_MOD_NAME)          # 兼容旧名字
+    _MOD_ORDER = ("Ctrl", "Shift", "Alt", "Win")
+    # ★ Windows 下 Tk 的 event.state 位和 X11 完全不一样：
+    #   0x0001=Shift、0x0004=Ctrl、0x20000=Alt，而 0x0008 是 NumLock 指示灯位
+    #   （不是 Alt）。老代码把 0x0008 当 Alt，于是 NumLock 开着时每个组合键都
+    #   凭空多出一个 Alt —— 就是这个 bug。0x0008 一律不认。
+    _STATE_MOD = (("Shift", 0x0001), ("Ctrl", 0x0004), ("Alt", 0x00020000))
+
+    def _hotkey_key_name(self, e) -> str | None:
+        """把一个 Tk 按键事件翻译成键名，认不出来返回 None。"""
+        ks = e.keysym
+        name = self._KEY_SYMS.get(ks) or self._KEY_SYMS.get(ks.lower())
+        if name:
+            return name
+        if sys.platform == "win32":
+            try:
+                vk_name = _VK_NAME.get(int(e.keycode))
+            except (TypeError, ValueError):
+                vk_name = None
+            if vk_name:
+                return vk_name
+        if len(ks) == 1:
+            return ks.upper()
+        if ks.startswith("KP_") and ks[3:].isdigit():
+            return ks[3:]
+        if len(ks) >= 2 and ks[0] == "F" and ks[1:].isdigit():
+            return ks                     # F1~F24
+        return ks.upper()                 # 其余交给 Hotkeys.parse 验证
 
     def hotkey_map(self) -> list[dict]:
         out = []
@@ -2336,47 +2437,70 @@ class App(tk.Tk):
         lbl = tk.Label(w, text="需包含 Ctrl / Alt / Win 其中一个；Esc 取消",
                        bg=t["card"], fg=t["ink_soft"], font=(t["font"], t["size_sm"]))
         lbl.pack(padx=SP["xl"], pady=(0, SP["lg"]))
+        tk.Label(w, text="Win 组合键可能被系统占用（Win+数字 是任务栏），优先用 Ctrl / Alt",
+                 bg=t["card"], fg=t["ink_soft"], font=(t["font"], t["size_sm"])).pack(
+            padx=SP["xl"], pady=(0, SP["lg"]))
         result: dict = {"spec": None}
+        held: set[str] = set()          # 当前物理按住的修饰键（自己记账，不全信 state）
+
+        def _mods_of(e) -> set[str]:
+            out = set(held)
+            st = int(getattr(e, "state", 0) or 0)
+            for name, bit in self._STATE_MOD:
+                if st & bit:
+                    out.add(name)
+            return out
+
+        def _take(e) -> str | None:
+            """把事件翻译成 'Ctrl+Alt+J'；不合格就在窗里提示并返回 None。"""
+            mods = _mods_of(e)
+            if not (mods & {"Ctrl", "Alt", "Win"}):
+                lbl.configure(text="要带 Ctrl / Alt / Win 其中一个，再按一次。",
+                              fg=t["warn"])
+                return None
+            key = self._hotkey_key_name(e)
+            if not key:
+                lbl.configure(text="这个键认不出来，换一个。", fg=t["warn"])
+                return None
+            spec = "+".join([m for m in self._MOD_ORDER if m in mods] + [key])
+            if Hotkeys.parse(spec)[1] is None:
+                lbl.configure(text=f"「{key}」这个键注册不了，换一个。", fg=t["warn"])
+                return None
+            return spec
 
         def on_key(e):
             ks = e.keysym
             if ks == "Escape":
                 w.destroy()
                 return
-            if ks in self._MOD_SYMS:
+            m = self._MOD_NAME.get(ks)
+            if m:
+                held.add(m)              # 修饰键自己按下的那一帧，记一笔
                 return
-            mods = []
-            st = e.state
-            if st & 0x0004:
-                mods.append("Ctrl")
-            if st & 0x0001:
-                mods.append("Shift")
-            if st & 0x0008:
-                mods.append("Alt")
-            if st & 0x0040:
-                mods.append("Win")
-            if not any(m in mods for m in ("Ctrl", "Alt", "Win")):
-                lbl.configure(text="要带 Ctrl / Alt / Win 其中一个，再按一次。",
-                              fg=t["warn"])
+            if ks == "??":
+                return                   # 系统塞进来的杂键，忽略
+            spec = _take(e)
+            if spec:
+                result["spec"] = spec
+                w.destroy()
+
+        def on_release(e):
+            m = self._MOD_NAME.get(e.keysym)
+            if m:
+                held.discard(m)
                 return
-            key = self._KEY_SYMS.get(ks) or self._KEY_SYMS.get(ks.lower())
-            if key is None:
-                if len(ks) == 1:
-                    key = ks.upper()
-                elif ks.startswith("KP_") and ks[3:].isdigit():
-                    key = ks[3:]
-                elif len(ks) >= 2 and ks[0] == "F" and ks[1:].isdigit():
-                    key = ks                     # F1~F24
-                else:
-                    key = ks.upper()             # 其余交给 Hotkeys.parse 验证
-            spec = "+".join(mods + [key])
-            if Hotkeys.parse(spec)[1] is None:
-                lbl.configure(text=f"「{key}」这个键注册不了，换一个。", fg=t["warn"])
+            # 兜底：Win 组合键的「按下」经常被系统截走（系统热键只发 WM_HOTKEY，
+            # 不再把 keydown 投给窗口），只收到抬键 —— 这时手上确实还按着修饰键，
+            # 就用抬键把它认下来。
+            if not held:
                 return
-            result["spec"] = spec
-            w.destroy()
+            spec = _take(e)
+            if spec:
+                result["spec"] = spec
+                w.destroy()
 
         w.bind("<Key>", on_key)
+        w.bind("<KeyRelease>", on_release)
         w.grab_set()
         w.focus_force()
         w.update_idletasks()
@@ -2387,13 +2511,23 @@ class App(tk.Tk):
         return result["spec"]
 
     def _hk_dup_warn(self, key: str, exclude: int | None = None) -> bool:
-        """组合键已被别的条目占了 → 问是否改绑。返回 True=可以继续。"""
-        for i, e in enumerate(self.hotkey_map()):
-            if i != exclude and e["key"] == key:
-                return bool(self._modal(
-                    "组合键已被占用",
-                    f"「{key}」已经绑在《{Path(e['song']).stem}》上。\n要改绑到新曲子吗？"
-                    "（原条目会被替换）", kind="warn", buttons=("改绑", "取消")))
+        """组合键已被别的条目占了 → 问是否改绑。确认就把旧条目删掉，返回 True=可以继续。
+
+        ★ 老版本只弹窗不删：确认"改绑"后列表里留下两条同 key 的记录，第二条注册
+          必然失败，而按下去触发的是先注册的那条（= 旧曲子），等于改绑没生效。
+        """
+        m = self.hotkey_map()
+        dups = [i for i, e in enumerate(m) if i != exclude and e["key"] == key]
+        if not dups:
+            return True
+        if not self._modal(
+                "组合键已被占用",
+                f"「{key}」已经绑在《{Path(m[dups[0]]['song']).stem}》上。\n要改绑到新曲子吗？"
+                "（原条目会被替换）", kind="warn", buttons=("改绑", "取消")):
+            return False
+        for i in sorted(dups, reverse=True):     # 从后往前删，下标才不会乱
+            m.pop(i)
+        self._save_hotkey_map(m)
         return True
 
     def hk_add(self):
@@ -2430,6 +2564,10 @@ class App(tk.Tk):
         if i is None:
             self.say("先在左边选一条热键。", "warn")
             return
+        m0 = self.hotkey_map()
+        if i >= len(m0):
+            return
+        old = m0[i]
         spec = self._capture_key_modal()
         if not spec:
             return
@@ -2441,9 +2579,17 @@ class App(tk.Tk):
                         "先在上方改掉它，再来绑曲目热键。", kind="warn")
             return
         m = self.hotkey_map()
-        m[i]["key"] = spec
+        # ★ 上面确认"改绑"可能删掉了一条，下标会整体前移 —— 按内容重新定位，
+        #   不能再用原来的 i（否则改的是隔壁那条）。
+        j = next((k for k, e in enumerate(m)
+                  if e["song"] == old["song"] and e["key"] == old["key"]), None)
+        if j is None:
+            j = min(i, len(m) - 1)
+        if j < 0:
+            return
+        m[j]["key"] = spec
         self._save_hotkey_map(m)
-        self.say(f"热键已改：{spec} → 《{Path(m[i]['song']).stem}》", "ok")
+        self.say(f"热键已改：{spec} → 《{Path(m[j]['song']).stem}》", "ok")
 
     def hk_resong(self):
         i = self._hk_selected()
@@ -2637,6 +2783,13 @@ class App(tk.Tk):
             #   不等就 destroy，daemon 线程被杀在 key_down 和 key_up 之间 → 键卡住不放。
             self.player.join(1.0)
             self.hotkeys.stop()
+        except Exception:
+            pass
+        # ★ 设置页的改动（键位映射 / 跳过前奏 / 循环 / 倒计时 / 曲库路径）只在切页
+        #   和开关热键时存过盘，直接关窗就丢了 —— 关之前统一收一次。
+        try:
+            self._save_now()               # 先把延迟写盘的（比如刚拖过的速度）落下去
+            self._sync_settings()
         except Exception:
             pass
         self.destroy()
