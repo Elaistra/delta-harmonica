@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 import shutil
 import sys
 import tempfile
@@ -18,7 +19,8 @@ from tkinter import ttk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from hca import favorites as favmod          # noqa: E402
+from hca import config as cfgmod              # noqa: E402
+from hca import favorites as favmod           # noqa: E402
 from hca.ui import App                        # noqa: E402
 
 PASS = FAIL = 0
@@ -197,6 +199,133 @@ def main() -> int:
                                  if isinstance(w, tk.Toplevel)])
         got = app._capture_key_modal()
         chk(label, got == expect, f"得到 {got!r} / 期望 {expect!r}")
+
+    print("\n[10] 第二轮审查修的几条")
+    # 10a 暂停不该吃掉曲子：_wait_until 用墙钟减 _t0，pause() 必须重锚时间基准
+    try:
+        from hca.model import Action
+        from hca.player import Player
+
+        class _Fake:
+            def __init__(self):
+                self.n = 0
+
+            def key_down(self, _k):
+                self.n += 1
+
+            def key_up(self, _k):
+                pass
+
+            def mouse_down(self, _m):
+                pass
+
+            def mouse_up(self, _m):
+                pass
+
+            def release_all(self):
+                pass
+
+        be = _Fake()
+        acts = [Action(t=i * 0.5, midi=60, hold=0.2, key="z", mods=[],
+                       hole="1", label="C4", bar=1) for i in range(20)]
+        pl = Player(be)
+        threading.Thread(target=lambda: pl.play(acts), daemon=True).start()
+        time.sleep(1.2)
+        before = pl.sent
+        pl.pause()
+        time.sleep(3.0)
+        frozen = pl.elapsed
+        pl.resume()
+        time.sleep(1.0)
+        after = pl.sent
+        pl.stop()
+        chk("暂停 3 秒后不多弹（老版本会跳过 6 个音）",
+            after - before <= 4, f"{before} → {after}")
+        chk("暂停期间进度冻住", abs(frozen - 1.2) < 0.4, f"{frozen:.2f}s")
+    except Exception as ex:
+        chk("暂停不跳音", False, f"{type(ex).__name__}: {ex}")
+
+    # 10b 畸形拍号的 MIDI：分母 255 曾让切小节循环跑不完（界面永久卡死）
+    try:
+        from hca.midi import parse_midi
+
+        def _mk(den_byte, num_byte):
+            body = bytes([0x00, 0xFF, 0x58, 0x04, num_byte, den_byte, 24, 8])
+            body += bytes([0x00, 0x90, 60, 64, 0x40, 0x80, 60, 0,
+                           0x40, 0x90, 62, 64, 0x40, 0x80, 62, 0,
+                           0x00, 0xFF, 0x2F, 0x00])
+            trk = b"MTrk" + len(body).to_bytes(4, "big") + body
+            return b"MThd" + (6).to_bytes(4, "big") + b"\x00\x00\x00\x01\x00\x60" + trk
+
+        for label, den, num in (("分母=255", 255, 4), ("分子=0", 4, 0)):
+            t0 = time.perf_counter()
+            try:
+                parse_midi(_mk(den, num))
+                good, detail = True, ""
+            except Exception as e:
+                good, detail = False, f"{type(e).__name__}: {e}"
+            dt = time.perf_counter() - t0
+            chk(f"拍号 {label} 不卡死也不除零", good and dt < 5.0, detail or f"{dt:.1f}s")
+    except Exception as ex:
+        chk("畸形拍号", False, f"{type(ex).__name__}: {ex}")
+
+    # 10c 配置文件：坏文件留底 + 字段类型矫正 + 不残留 .tmp
+    cfg_tmp = Path(tempfile.mkdtemp(prefix="hca_cfg_"))
+    try:
+        bad = cfg_tmp / "hca.json"
+        bad.write_text('{"favorites": [{"name": "甲", "songs": ["a.mid"]}], "rate"',
+                       encoding="utf-8")
+        cfgmod.load(bad)
+        chk("坏配置另存 .bad（内容还在）",
+            "a.mid" in bad.with_name("hca.json.bad").read_text(encoding="utf-8"))
+        weird = cfg_tmp / "w.json"
+        weird.write_text(json.dumps({"rate": "快", "countdown": None, "lib_dir": [],
+                                     "favorites": "abc", "control_keys": 5}),
+                         encoding="utf-8")
+        c2 = cfgmod.load(weird)
+        chk("rate='快' → 默认 1.0", c2["rate"] == 1.0, str(c2["rate"]))
+        chk("countdown=null → 默认 3.0", c2["countdown"] == 3.0, str(c2["countdown"]))
+        chk("lib_dir=[] → 字符串", isinstance(c2["lib_dir"], str), str(c2["lib_dir"]))
+        chk("favorites='abc' → []", c2["favorites"] == [], str(c2["favorites"]))
+        chk("control_keys=5 → 四键齐全",
+            set(c2["control_keys"]) == {"toggle", "stop", "prev", "next"},
+            str(c2["control_keys"]))
+        cfgmod.save(weird, c2)
+        chk("存盘后读回一致", cfgmod.load(weird)["favorites"] == c2["favorites"])
+        chk("没留下 .tmp", not list(cfg_tmp.glob("*.tmp")))
+    except Exception as ex:
+        chk("配置文件加固", False, f"{type(ex).__name__}: {ex}")
+    finally:
+        shutil.rmtree(cfg_tmp, ignore_errors=True)
+
+    # 10d 同一首丢失的曲子在 2 个收藏夹里：老版本按曲名当 iid → 重复 → 启动崩溃
+    try:
+        app.cfg["favorites"] = [{"name": "甲", "songs": ["gone.mid"]},
+                                {"name": "乙", "songs": ["gone.mid"]}]
+        app._fav_reload_left()
+        app._fav_reload_right()
+        miss_rows = [i for i in app.fav_songs.get_children() if str(i).startswith("miss::")]
+        chk("丢失曲目只插一行（不撞重复 iid）", len(miss_rows) == 1, str(miss_rows))
+    except Exception as ex:
+        chk("收藏夹重复丢失曲目", False, f"{type(ex).__name__}: {ex}")
+
+    # 10e 热键改绑：确认后旧条目必须真被删掉
+    try:
+        app.cfg["hotkey_map"] = [{"key": "Ctrl+1", "song": "a.mid"},
+                                 {"key": "Ctrl+2", "song": "b.mid"}]
+        app._modal = lambda *a, **k: "ok"
+        res = app._hk_dup_warn("Ctrl+1", exclude=1)
+        chk("确认改绑 → 旧条目被替换",
+            res is True and app.hotkey_map() == [{"key": "Ctrl+2", "song": "b.mid"}],
+            str(app.hotkey_map()))
+        app.cfg["hotkey_map"] = [{"key": "Ctrl+1", "song": "a.mid"},
+                                 {"key": "Ctrl+2", "song": "b.mid"}]
+        app._modal = lambda *a, **k: None
+        chk("取消 → 一条都不删",
+            app._hk_dup_warn("Ctrl+1", exclude=1) is False
+            and len(app.hotkey_map()) == 2, str(app.hotkey_map()))
+    except Exception as ex:
+        chk("热键改绑", False, f"{type(ex).__name__}: {ex}")
 
     try:
         app.destroy()
