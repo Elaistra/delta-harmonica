@@ -15,9 +15,13 @@
 
 ## 怎么拿到
 
-**不想装 Python 的（推荐）**：到 Releases 页面下载 `三角洲口琴自动演奏.exe`，双击就能用。
+**不想装 Python 的（推荐）**：到 Releases 页面下载 exe，双击就能用。
 
 <https://github.com/xkrmand-web/delta-harmonica/releases>
+
+下载下来的文件名是 `delta-harmonica-v1.0.0.exe` —— **GitHub 的 Release 附件不支持中文
+文件名**（传上去会被强制改成 `default.exe`），所以附件名用了英文；程序本身、窗口标题
+和曲库文件夹仍然是中文的。
 
 第一次打开时，程序会在 exe 旁边自动建一个「曲库」文件夹，并放进一首示例曲（小星星），
 所以**双击之后立刻就有东西可弹**。想弹别的曲子：进「内置社区分享库」页搜索下载，
