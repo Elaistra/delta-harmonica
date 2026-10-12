@@ -1,0 +1,134 @@
+{
+ "name": "web_harmonica",
+ "label": "网页复刻版（从原程序实测）",
+ "source": "reverse",
+ "note": "",
+ "keys": [
+  {
+   "key": "Z",
+   "hole": "1",
+   "base_midi": 60,
+   "scancode": 44
+  },
+  {
+   "key": "X",
+   "hole": "2",
+   "base_midi": 62,
+   "scancode": 45
+  },
+  {
+   "key": "C",
+   "hole": "3",
+   "base_midi": 64,
+   "scancode": 46
+  },
+  {
+   "key": "V",
+   "hole": "4",
+   "base_midi": 65,
+   "scancode": 47
+  },
+  {
+   "key": "B",
+   "hole": "5",
+   "base_midi": 67,
+   "scancode": 48
+  },
+  {
+   "key": "N",
+   "hole": "6",
+   "base_midi": 69,
+   "scancode": 49
+  },
+  {
+   "key": "M",
+   "hole": "7",
+   "base_midi": 71,
+   "scancode": 50
+  },
+  {
+   "key": ",",
+   "hole": "8",
+   "base_midi": 72,
+   "scancode": 51
+  }
+ ],
+ "keyless_holes": [
+  [
+   "9",
+   74
+  ],
+  [
+   "10",
+   76
+  ]
+ ],
+ "modifiers": {
+  "left": [
+   "左键",
+   -12
+  ],
+  "middle": [
+   "中键",
+   1
+  ],
+  "right": [
+   "右键",
+   12
+  ]
+ },
+ "combos": [
+  [
+   0,
+   []
+  ],
+  [
+   1,
+   [
+    "middle"
+   ]
+  ],
+  [
+   -11,
+   [
+    "left",
+    "middle"
+   ]
+  ],
+  [
+   -12,
+   [
+    "left"
+   ]
+  ],
+  [
+   12,
+   [
+    "right"
+   ]
+  ],
+  [
+   13,
+   [
+    "middle",
+    "right"
+   ]
+  ]
+ ],
+ "major_semitones": [
+  0,
+  2,
+  4,
+  5,
+  7,
+  9,
+  11
+ ],
+ "max_offset": 12,
+ "bend_range": 2,
+ "octave_shift_cost": 8,
+ "gap_ratio": 0.08,
+ "max_gap_beats": 0.09,
+ "end_pad_beats": 1.5,
+ "grid": 0.25
+}

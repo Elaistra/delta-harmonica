@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>口琴参照器 · 键位映射验证用</title>
+<style>
+  :root{
+    --bg:#16181a; --card:#1e2124; --line:#33383d; --ink:#e8eaec; --dim:#9aa1a8;
+    --accent:#d9a441; --ok:#5fbf83; --bad:#e0655a; --blue:#6aa6e0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.6 "Microsoft YaHei UI",system-ui,sans-serif}
+  header{padding:14px 20px;border-bottom:1px solid var(--line);
+         display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+  h1{font-size:16px;font-weight:500;margin:0}
+  .dim{color:var(--dim);font-size:12px}
+  .wrap{display:grid;grid-template-columns:minmax(380px,1.1fr) 1fr;gap:16px;padding:16px 20px;align-items:start}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .card h2{font-size:13px;font-weight:500;margin:0 0 10px;color:var(--dim)}
+  .warn{border-color:#5a4520;background:#241d10;font-size:12px;line-height:1.7}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  button{background:#2a2f34;color:var(--ink);border:1px solid var(--line);
+         border-radius:7px;padding:6px 12px;font:inherit;cursor:pointer}
+  button:hover{border-color:#4a5158}
+  button.on{background:var(--accent);color:#1a1a1a;border-color:var(--accent);font-weight:500}
+  button.danger{color:var(--bad);border-color:#4a2b28}
+  .holes{display:flex;gap:6px;margin:6px 0 14px}
+  .hole{flex:1;text-align:center;padding:10px 0;border-radius:8px;
+        background:#242a2f;border:1px solid var(--line);transition:.08s}
+  .hole.on{background:var(--accent);border-color:var(--accent);color:#1a1a1a}
+  .hole .n{font-size:16px;font-weight:500}
+  .hole .k{font-size:11px;color:var(--dim)}
+  .hole.on .k{color:#3a3020}
+  .hole.dead{opacity:.4}
+  .grid{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:13px}
+  .grid .k2{color:var(--dim)}
+  .big{font-size:20px;font-weight:500;color:var(--accent)}
+  .mono{font-family:ui-monospace,Consolas,monospace}
+  textarea{width:100%;min-height:90px;background:#161b1f;color:var(--ink);
+           border:1px solid var(--line);border-radius:7px;padding:8px;
+           font:12px/1.5 ui-monospace,Consolas,monospace;resize:vertical}
+  .ev{max-height:220px;overflow:auto;font:12px/1.6 ui-monospace,Consolas,monospace}
+  .ev div{padding:1px 0;border-bottom:1px solid #23282c}
+  .ev .down{color:var(--ok)} .ev .up{color:var(--dim)} .ev .mouse{color:var(--blue)}
+  .pill{display:inline-block;padding:1px 8px;border-radius:20px;background:#2a2f34;
+        font-size:11px;color:var(--dim)}
+  .pill.live{background:#22331f;color:var(--ok)}
+  .tmap{font:12px/1.7 ui-monospace,Consolas,monospace;color:var(--dim)}
+  .tmap b{color:var(--ink);font-weight:400}
+</style>
+</head>
+<body>
+<header>
+  <h1>口琴参照器</h1>
+  <span class="dim">口琴演奏器 · 新版自带 —— 用来验证「乐谱 → 按键 → 发声」整条链路</span>
+  <span class="pill" id="focusPill">窗口未聚焦</span>
+</header>
+
+<div class="wrap">
+  <div>
+    <div class="card warn" style="margin-bottom:16px">
+      <b style="color:var(--accent)">这个页面能证明什么、不能证明什么</b><br>
+      ✅ <b>能</b>：证明我们的整条链路对 —— 扫描码 → 浏览器 <span class="mono">e.code</span> 对不对、
+      孔位/移调算得对不对、时序准不准。这是<b>唯一</b>能把"发出去"和"收到"对上账的办法。<br>
+      ❌ <b>不能</b>：《三角洲行动》本体的键位。这里用的是我们自己实现的映射
+      （来自原程序实测常量），**它只是"我们自己的参照系"，不代表正式游戏**。
+      <div style="margin-top:8px">安全：这是本机网页，没有反作弊、没有封号风险 ——
+      所以可以随便测。</div>
+    </div>
+
+    <div class="card">
+      <h2>按下键就会响（点一下页面让它有焦点）</h2>
+      <div class="holes" id="holes"></div>
+      <div class="grid">
+        <span class="k2">浏览器 e.code</span><span class="mono" id="vCode">—</span>
+        <span class="k2">键 / 孔</span><span class="mono" id="vKey">—</span>
+        <span class="k2">当前移调</span><span class="mono" id="vTrans">0 半音</span>
+        <span class="k2">实际音高</span><span class="big" id="vPitch">—</span>
+        <span class="k2">MIDI</span><span class="mono" id="vMidi">—</span>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button id="btnSound" class="on">🔊 声音开</button>
+        <button id="btnCtx">右键菜单已拦截</button>
+        <span class="dim">移调：左键 −12 · 中键 +1 · 右键 +12（可组合）</span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>录制 / 导出（给自动化演奏对账用）</h2>
+      <div class="row">
+        <button id="btnRec">● 开始录制</button>
+        <button id="btnClr" class="danger">清空</button>
+        <button id="btnCopy">复制录制结果</button>
+        <span class="dim" id="recStat">0 条事件</span>
+      </div>
+      <div class="ev" id="evList" style="margin-top:10px"></div>
+      <div class="dim" style="margin-top:8px">
+        拿到 JSON 后跑：<span class="mono">python verify/web_conformance.py 录制.json 动作表.json</span>
+        —— 它会逐条对你"该发的"和"实际收到的"。
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h2>当前映射（可粘贴 JSON 替换）</h2>
+      <div class="tmap" id="mapTable"></div>
+      <div class="row" style="margin-top:10px">
+        <button id="btnReset">恢复内置映射</button>
+        <button id="btnApply">应用下面的 JSON</button>
+      </div>
+      <textarea id="mapJson" spellcheck="false"></textarea>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>10 个孔的说明</h2>
+      <div class="dim" style="font-size:12px;line-height:1.8">
+        孔 1–8 有对应键位。孔 9/10（74 / 76）<b>没有键盘键</b>，
+        原程序只能靠"移调到别的音高"来间接覆盖，所以自动演奏实际发出的永远是
+        8 个键 + 鼠标移调。<br>
+        <span id="rangeInfo"></span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>怎么用它做验证（端到端）</h2>
+      <div class="dim" style="font-size:12px;line-height:1.8">
+        1. 用浏览器打开本页，<b>点一下页面</b>让它有焦点、声音才能播<br>
+        2. 点「开始录制」<br>
+        3. 在终端跑：<span class="mono">python -m hca.cli --song 曲名 --engine reference</span><br>
+        4. 演奏结束后点「复制录制结果」，存成 <span class="mono">rec.json</span><br>
+        5. 跑对照脚本 —— 逐条比"该发的"和"收到的"<br>
+        <b style="color:var(--accent)">这一步验的是最要紧的一件事</b>：
+        我们发的扫描码，在浏览器这边到底变成了哪个 <span class="mono">e.code</span>。
+        原程序整套设计都押在这个映射上，但从来没被端到端验证过。
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const NOTE_NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+const midiName = m => NOTE_NAMES[((m%12)+12)%12] + (Math.floor(m/12)-1);
+
+let MAP = {
+  label:"内置（来自原程序实测常量）",
+  keys:[
+    {code:"KeyZ", hole:"1", base:60}, {code:"KeyX", hole:"2", base:62},
+    {code:"KeyC", hole:"3", base:64}, {code:"KeyV", hole:"4", base:65},
+    {code:"KeyB", hole:"5", base:67}, {code:"KeyN", hole:"6", base:69},
+    {code:"KeyM", hole:"7", base:71}, {code:"Comma", hole:"8", base:72}
+  ],
+  keyless:[["9",74],["10",76]],
+  modifiers:{left:-12, middle:1, right:12},
+  combos:[[0,[]],[1,["middle"]],[-11,["left","middle"]],[-12,["left"]],[12,["right"]],[13,["middle","right"]]]
+};
+
+const held = new Set();        // 按下的鼠标键
+const downKeys = new Set();    // 按下的键盘 code
+let recording = false, events = [], t0 = 0, sound = true;
+
+const $ = id => document.getElementById(id);
+
+/* ── 音高 ───────────────────────────────────────────── */
+function transposeNow(){
+  const mods = Object.keys(MAP.modifiers).filter(m=>held.has(m));
+  const keyset = mods.slice().sort().join("+");
+  for(const [semi, need] of MAP.combos){
+    if(need.slice().sort().join("+") === keyset) return {semi, mods, valid:true};
+  }
+  return {semi:null, mods, valid:held.size===0};
+}
+function keyInfo(code){ return MAP.keys.find(k=>k.code===code) || null; }
+
+/* ── 声音 ───────────────────────────────────────────── */
+let ac = null;
+function beep(midi, dur=0.35){
+  if(!sound) return;
+  try{
+    ac = ac || new (window.AudioContext||window.webkitAudioContext)();
+    if(ac.state === "suspended") ac.resume();
+    const f = 440 * Math.pow(2,(midi-69)/12);
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = "triangle"; o.frequency.value = f;
+    g.gain.setValueAtTime(0, ac.currentTime);
+    g.gain.linearRampToValueAtTime(0.18, ac.currentTime+0.012);
+    g.gain.exponentialRampToValueAtTime(0.0005, ac.currentTime+Math.max(0.12,dur));
+    o.connect(g).connect(ac.destination);
+    o.start(); o.stop(ac.currentTime + Math.max(0.14,dur) + 0.02);
+  }catch(e){}
+}
+
+/* ── 渲染 ───────────────────────────────────────────── */
+function renderHoles(activeHole){
+  $("holes").innerHTML = MAP.keys.map(k =>
+      `<div class="hole${k.hole===activeHole?" on":""}">
+         <div class="n">${k.hole}</div><div class="k">${k.code.replace("Key","").replace("Comma",",")}</div>
+       </div>`).join("")
+    + MAP.keyless.map(([h,m]) =>
+      `<div class="hole dead"><div class="n">${h}</div><div class="k">无键位</div></div>`).join("");
+}
+function renderMap(){
+  $("mapTable").innerHTML =
+    "<b>键 → 孔 → 基础音高</b><br>" +
+    MAP.keys.map(k=>`${k.code.replace("Key","").replace("Comma",",")} → 孔 ${k.hole} → ${midiName(k.base)} (${k.base})`).join("<br>") +
+    "<br><br><b>鼠标 → 移调</b><br>" +
+    Object.entries(MAP.modifiers).map(([m,s])=>`${m} → ${s>0?"+":""}${s} 半音`).join("<br>") +
+    "<br><br><b>允许的组合</b><br>" +
+    MAP.combos.map(([s,need])=>`${s>0?"+":""}${s}${need.length?"（"+need.join("+")+"）":"（不按）"}`).join("<br>");
+  const bases = MAP.keys.map(k=>k.base), semis = MAP.combos.map(c=>c[0]);
+  const lo = Math.min(...bases.map(b=>Math.min(...semis.map(s=>b+s))));
+  const hi = Math.max(...bases.map(b=>Math.max(...semis.map(s=>b+s))));
+  $("rangeInfo").innerHTML = `键盘够得到的音域：<b>${midiName(lo)} ~ ${midiName(hi)}</b>（MIDI ${lo}~${hi}）—— 与原程序实测的 48~85 一致。`;
+  $("mapJson").value = JSON.stringify(MAP, null, 1);
+}
+function showPitch(info, code){
+  const tr = transposeNow();
+  $("vCode").textContent = code || "—";
+  if(!info){ $("vKey").textContent = "—"; $("vTrans").textContent =
+      tr.valid ? `${tr.semi??0} 半音` : "非法组合（" + tr.mods.join("+") + "）";
+    return; }
+  $("vKey").textContent = `${code.replace("Key","").replace("Comma",",")}  →  孔 ${info.hole}`;
+  $("vTrans").textContent = tr.valid ? `${tr.semi} 半音` : "非法组合 → 不发声";
+  if(tr.semi === null || tr.semi === undefined){ $("vPitch").textContent="—"; $("vMidi").textContent="—"; return; }
+  const midi = info.base + tr.semi;
+  $("vPitch").textContent = midiName(midi);
+  $("vMidi").textContent = midi;
+}
+
+/* ── 录制 ───────────────────────────────────────────── */
+function rec(type, detail){
+  if(!recording) return;
+  if(!t0) t0 = performance.now();
+  events.push(Object.assign({dt:+((performance.now()-t0)/1000).toFixed(3), type}, detail));
+  renderEvents();
+}
+function renderEvents(){
+  const el = $("evList");
+  el.innerHTML = events.slice(-200).map(e=>{
+    const cls = e.type.includes("up") ? "up" : e.type.includes("mouse") ? "mouse" : "down";
+    return `<div class="${cls}">${e.dt.toFixed(3)}s  ${e.type}  ${e.code||e.mod}
+      ${e.hole?"  孔"+e.hole:""}${e.midi!==undefined?"  "+midiName(e.midi)+"("+e.midi+")":""}</div>`;
+  }).join("");
+  el.scrollTop = el.scrollHeight;
+  $("recStat").textContent = events.length + " 条事件";
+}
+
+/* ── 事件绑定 ───────────────────────────────────────── */
+addEventListener("keydown", e=>{
+  const info = keyInfo(e.code);
+  showPitch(info, e.code);
+  renderHoles(info && info.hole);
+  if(info){
+    e.preventDefault();
+    if(!downKeys.has(e.code)){
+      downKeys.add(e.code);
+      const tr = transposeNow();
+      if(tr.valid && tr.semi!==null) beep(info.base + tr.semi);
+      rec("keydown", {code:e.code, hole:info.hole, base:info.base,
+                      trans:tr.valid?tr.semi:null,
+                      midi:tr.valid?info.base+tr.semi:undefined});
+    }
+  } else {
+    rec("keydown-other", {code:e.code});
+  }
+});
+addEventListener("keyup", e=>{
+  if(downKeys.has(e.code)){
+    downKeys.delete(e.code);
+    const info = keyInfo(e.code);
+    rec("keyup", {code:e.code, hole:info?info.hole:undefined});
+  }
+  if(keyInfo(e.code)) renderHoles(null);
+});
+addEventListener("mousedown", e=>{
+  if(e.target.tagName === "TEXTAREA" || e.target.tagName === "BUTTON") return;
+  e.preventDefault();
+  const mod = ["left","middle","right"][e.button];
+  if(!mod) return;
+  if(!held.has(mod)){
+    held.add(mod);
+    const tr = transposeNow();
+    rec("mousedown", {mod, code:null, trans:tr.valid?tr.semi:null});
+    const last = MAP.keys.find(k=>downKeys.has(k.code));
+    const midi = (last && tr.valid && tr.semi!==null) ? last.base+tr.semi : null;
+    if(midi!==null) beep(midi);
+    showPitch(last||null, last?last.code:"");
+  }
+});
+addEventListener("mouseup", e=>{
+  const mod = ["left","middle","right"][e.button];
+  if(mod && held.has(mod)){ held.delete(mod); rec("mouseup", {mod, code:null}); showPitch(null,null); }
+});
+addEventListener("contextmenu", e=>e.preventDefault());
+addEventListener("blur", ()=>{ held.clear(); downKeys.clear(); renderHoles(null); });
+addEventListener("focus", ()=>{ $("focusPill").textContent = "窗口已聚焦"; $("focusPill").classList.add("live"); });
+addEventListener("blur", ()=>{ $("focusPill").textContent = "窗口未聚焦"; $("focusPill").classList.remove("live"); });
+
+$("btnSound").onclick = e=>{
+  sound = !sound;
+  e.target.classList.toggle("on", sound);
+  e.target.textContent = sound ? "🔊 声音开" : "🔇 静音";
+};
+$("btnRec").onclick = e=>{
+  recording = !recording;
+  e.target.classList.toggle("on", recording);
+  e.target.textContent = recording ? "■ 停止录制" : "● 开始录制";
+  if(recording){ events = []; t0 = 0; renderEvents(); }
+};
+$("btnClr").onclick = ()=>{ events = []; t0 = 0; renderEvents(); };
+$("btnCopy").onclick = async ()=>{
+  const txt = JSON.stringify({source:"harmonica.html", mapping:MAP.label, events}, null, 1);
+  try{ await navigator.clipboard.writeText(txt); alert("已复制 " + events.length + " 条事件到剪贴板"); }
+  catch(err){ console.log(txt); alert("复制失败，已打印到控制台（F12 里取）"); }
+};
+$("btnReset").onclick = ()=>{ MAP = JSON.parse(localStorage.__map || "null") || MAP; renderMap(); renderHoles(null); };
+$("btnApply").onclick = ()=>{
+  try{
+    const m = JSON.parse($("mapJson").value);
+    MAP = m; localStorage.__map = JSON.stringify(m);
+    renderMap(); renderHoles(null); alert("映射已应用");
+  }catch(err){ alert("JSON 解析失败：" + err.message); }
+};
+$("btnCtx").onclick = ()=>alert("右键已被拦截 —— 否则按右键会弹出菜单，收不到移调事件。");
+
+renderMap();
+renderHoles(null);
+</script>
+</body>
+</html>
